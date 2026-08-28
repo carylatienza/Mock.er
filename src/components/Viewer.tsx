@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { ContactShadows, OrbitControls } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { buildJersey } from '@/lib/jersey';
 import { TEX_SIZE, drawComposite, makeFabricNormal, type CompositeOpts } from '@/lib/texture';
 import { PRESETS, type Preset } from '@/lib/presets';
+import { loadJerseyGLB, type LoadedJersey } from '@/lib/loadMesh';
 
 // Fixed export size so a client deliverable does not vary with window size.
 const EXPORT_SIZE = 1600;
@@ -35,6 +36,25 @@ function Scene({ composite, handleRef, onBackVisible }: SceneProps) {
   const { gl, scene, camera } = useThree();
   const controls = useRef<OrbitControlsImpl>(null);
   const panels = useMemo(() => buildJersey(), []);
+
+  // A real garment mesh beats anything parametric for silhouette, so prefer one
+  // if it is there. Absent (the default), fall back to the procedural panels
+  // rather than rendering nothing.
+  const [glb, setGlb] = useState<LoadedJersey | null>(null);
+  useEffect(() => {
+    let alive = true;
+    loadJerseyGLB('/jersey.glb').then((r) => {
+      if (!alive || !r) return;
+      setGlb(r);
+      console.info(
+        `[mock.er] loaded /jersey.glb — ${r.triangles} triangles from ${r.meshes} mesh(es); UVs re-projected onto the panel contract.`,
+      );
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  useEffect(() => () => glb?.geometry.dispose(), [glb]);
 
   // three.js resources are imperative and long-lived: created once, mutated in
   // place, disposed on unmount. Grouping them keeps that lifecycle in one spot.
@@ -144,9 +164,13 @@ function Scene({ composite, handleRef, onBackVisible }: SceneProps) {
       <directionalLight position={[-4, 2, 2]} intensity={0.9} />
       <directionalLight position={[0, 2, -5]} intensity={1.5} />
 
-      {Object.entries(panels).map(([name, geometry]) => (
-        <mesh key={name} geometry={geometry} material={gfx.material} castShadow receiveShadow />
-      ))}
+      {glb ? (
+        <mesh geometry={glb.geometry} material={gfx.material} castShadow receiveShadow />
+      ) : (
+        Object.entries(panels).map(([name, geometry]) => (
+          <mesh key={name} geometry={geometry} material={gfx.material} castShadow receiveShadow />
+        ))
+      )}
 
       <ContactShadows position={[0, -0.75, 0]} opacity={0.45} scale={4} blur={2.4} far={1.2} />
       <OrbitControls

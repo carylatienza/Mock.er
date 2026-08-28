@@ -37,6 +37,9 @@ export function buildSilhouette(mask: Mask): Silhouette {
   return { topY, bottomY, minX: bbox.minX, maxX: bbox.maxX };
 }
 
+/** Fraction of the panel height over which the top contour stops steering. */
+const YOKE = 0.28;
+
 /**
  * Inverse-maps the source into a destW x destH panel where v=1 is the garment's
  * top edge and v=0 its hem — so the artwork follows the silhouette instead of
@@ -49,6 +52,16 @@ export function warpToPanel(src: ImageData, mask: Mask, destW: number, destH: nu
   const span = s.maxX - s.minX;
   const d = out.data, sd = src.data;
 
+  // The shoulder line: the highest the garment reaches on any column. Below the
+  // yoke the top contour stops steering, so a straight chest band stays straight
+  // instead of chasing the neckline down the chest in a zigzag.
+  let shoulder = Infinity;
+  for (let x = s.minX; x <= s.maxX; x++) {
+    const v = s.topY[x];
+    if (!Number.isNaN(v) && v < shoulder) shoulder = v;
+  }
+  if (!Number.isFinite(shoulder)) shoulder = mask.bbox.minY;
+
   for (let dy = 0; dy < destH; dy++) {
     const t = (dy + 0.5) / destH;          // 0 at the neckline, 1 at the hem
     for (let dx = 0; dx < destW; dx++) {
@@ -57,7 +70,11 @@ export function warpToPanel(src: ImageData, mask: Mask, destW: number, destH: nu
       const x0 = Math.floor(srcX), fx = srcX - x0;
       const top = lerpCol(s.topY, x0, fx), bot = lerpCol(s.bottomY, x0, fx);
       if (Number.isNaN(top) || Number.isNaN(bot)) continue;
-      const srcY = top + t * (bot - top);
+      // Follow this column's own neck/armhole cut at the very top, then ease over
+      // to the common shoulder line by the bottom of the yoke (t = YOKE).
+      const k = t >= YOKE ? 1 : (t / YOKE) * (t / YOKE) * (3 - 2 * (t / YOKE));
+      const effTop = top + (shoulder - top) * k;
+      const srcY = effTop + t * (bot - effTop);
       if (mask.alpha[Math.round(srcY) * mask.width + Math.round(srcX)] < 128) continue;
       sample(sd, src.width, src.height, srcX, srcY, d, o);
     }

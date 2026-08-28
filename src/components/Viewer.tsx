@@ -49,12 +49,14 @@ function Scene({ composite, handleRef, onBackVisible }: SceneProps) {
     const normalMap = new THREE.CanvasTexture(makeFabricNormal());
     normalMap.colorSpace = THREE.NoColorSpace;
     normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
-    normalMap.repeat.set(24, 24);
+    // 24 tiled the 8-thread weave ~192x across a panel, which moires into
+    // visible ribbing at screen resolution. 9 keeps it readable as cloth.
+    normalMap.repeat.set(9, 9);
 
     const material = new THREE.MeshStandardMaterial({
       map,
       normalMap,
-      normalScale: new THREE.Vector2(0.35, 0.35),
+      normalScale: new THREE.Vector2(0.22, 0.22),
       roughness: 0.72,
       metalness: 0,
       // The tube is open at neck, hem and armholes, so backfaces are visible.

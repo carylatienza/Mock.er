@@ -86,7 +86,7 @@ export default function Controls(p: Props) {
         </div>
       )}
 
-      <div className="pointer-events-auto absolute bottom-6 left-6 flex w-[290px] flex-col gap-4 rounded-xl border border-white/10 bg-black/50 p-4 backdrop-blur-xl">
+      <div className="pointer-events-auto absolute bottom-6 left-6 flex max-h-[calc(100vh-6rem)] w-[290px] flex-col gap-4 overflow-y-auto rounded-xl border border-white/10 bg-black/50 p-4 backdrop-blur-xl">
         <div
           onDragOver={(e) => {
             e.preventDefault();

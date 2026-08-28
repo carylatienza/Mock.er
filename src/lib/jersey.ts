@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /**
- * Procedural sleeveless basketball jersey.
+ * Procedural short-sleeve team jersey.
  *
  * UV CONTRACT (fixed — the texture pipeline is written against this):
  *
@@ -34,11 +34,24 @@ export const JERSEY = {
   hemScale: 0.9, // ring narrows toward the hem so it drapes instead of tubing
   topScale: 0.96, // and eases back in above the chest toward the shoulders
   chestT: 0.7, // t of the widest ring
-  neckDepthFront: 0.3, // drop below shoulderY at front center
-  neckDepthBack: 0.16, // real jerseys sit higher at the back
-  armholeDepth: 0.42, // deepest cut of all
-  neckHalfWidth: Math.PI * (40 / 180), // neck dips die out exactly at the shoulders
-  armholeHalfWidth: Math.PI * (50 / 180), // ...and so do the armhole dips
+  neckDepthFront: 0.17, // drop below shoulderY at front center
+  neckDepthBack: 0.07, // real jerseys sit higher at the back
+  // With sleeves attached the shoulder is covered, so the body's top edge only
+  // eases down toward the underarm seam. The old 0.42 cut here made four spikes.
+  armholeDepth: 0.09,
+  neckHalfWidth: Math.PI * (38 / 180), // neck dips die out exactly at the shoulders
+  armholeHalfWidth: Math.PI * (46 / 180), // ...and so do the armhole dips
+
+  // Short set-in sleeve. The base ring is buried a little inside the body so the
+  // join never shows a gap as the garment is orbited.
+  sleeveLength: 0.32,
+  sleeveBaseR: 0.25, // close to the body's half-depth, so the join has no notch
+  sleeveCuffR: 0.2,
+  sleeveDrop: 0.3, // downward component of the sleeve axis; 0 = straight out
+  sleeveInset: 0.6, // fraction of chestRX at which the sleeve ring is centred
+  // The ring extends +/-sleeveBaseR about its centre, so the centre has to sit a
+  // full radius below the shoulder or the sleeve stands up above the shoulder line.
+  sleeveDropFromShoulder: 0.21,
 } as const;
 
 // Panel spans: front faces +Z, back -Z, sides ±X. Front/back take 100 degrees each,
@@ -46,9 +59,13 @@ export const JERSEY = {
 // separate geometries means hard shading edges there, which is intentional.
 const DEG = Math.PI / 180;
 const SEG_T = 40; // rings from hem to top edge
-const SEG_A_FB = 40; // angular segments, front and back (2.5 deg each)
-const SEG_A_SIDE = 32; // angular segments per side (2.5 deg each)
-// Triangles = 2 * segA * SEG_T => front 3200 + back 3200 + 2560 + 2560 = 11520 total.
+const SEG_A_FRONT = 64; // angular segments across the 180-degree front
+const SEG_A_BACK = 32; // across the 80-degree back
+const SEG_A_SIDE = 20; // per 50-degree side flank
+const SEG_SLEEVE_A = 24; // around the sleeve tube
+const SEG_SLEEVE_L = 10; // along it
+// Triangles = 2 * segA * SEG_T => front 5120 + back 2560 + sides 1600x2,
+// plus 480 per sleeve => 11,840 total, well under the 50k ceiling in the PRD.
 
 /** Superellipse ring radius at `theta`, measured from +Z (front center) toward +X. */
 function ringRadius(theta: number): number {
@@ -106,6 +123,7 @@ function buildPanel(
   thetaEnd: number,
   segA: number,
   uvRect: readonly [number, number, number, number],
+  project = false,
 ): THREE.BufferGeometry {
   const [u0, v0, u1, v1] = uvRect;
   const cols = segA + 1;
@@ -121,7 +139,11 @@ function buildPanel(
     const sx = Math.sin(theta);
     const cz = Math.cos(theta);
     const yTop = topEdge(theta);
-    const u = THREE.MathUtils.lerp(u0, u1, a);
+    // A front-view photo is a projection: a point at angle theta lands at
+    // x proportional to sin(theta). Undoing that here means the artwork keeps its
+    // proportions instead of being stretched toward the silhouette edges.
+    const uT = project ? (Math.sin(theta) + 1) / 2 : a;
+    const u = THREE.MathUtils.lerp(u0, u1, uT);
 
     for (let it = 0; it < rows; it++) {
       const t = it / SEG_T;
@@ -160,11 +182,88 @@ function buildPanel(
   return geo;
 }
 
+/**
+ * A short set-in sleeve: a tapered tube swept along an axis that runs outward and
+ * down from the shoulder. `sign` is +1 for the +X flank, -1 for -X.
+ *
+ * Sleeves share the side panels' UV island, so they take the side colour (or the
+ * override swatch) — which is how the great majority of real teamwear is cut.
+ */
+function buildSleeve(
+  sign: 1 | -1,
+  uvRect: readonly [number, number, number, number],
+): THREE.BufferGeometry {
+  const [u0, v0, u1, v1] = uvRect;
+  const { sleeveLength, sleeveBaseR, sleeveCuffR, sleeveDrop, sleeveInset } = JERSEY;
+
+  const dir = new THREE.Vector3(sign, -sleeveDrop, 0).normalize();
+  // Ring basis: e1 along Z (front-back), e2 perpendicular to both.
+  const e1 = new THREE.Vector3(0, 0, 1);
+  const e2 = new THREE.Vector3().crossVectors(dir, e1).normalize();
+  const base = new THREE.Vector3(
+    sign * JERSEY.chestRX * sleeveInset,
+    JERSEY.shoulderY - JERSEY.sleeveDropFromShoulder,
+    0,
+  );
+
+  const cols = SEG_SLEEVE_A + 1;
+  const rows = SEG_SLEEVE_L + 1;
+  const positions = new Float32Array(cols * rows * 3);
+  const uvs = new Float32Array(cols * rows * 2);
+  const indices = new Uint32Array(SEG_SLEEVE_A * SEG_SLEEVE_L * 6);
+
+  for (let ia = 0; ia < cols; ia++) {
+    const a = ia / SEG_SLEEVE_A;
+    const phi = a * Math.PI * 2;
+    const cosP = Math.cos(phi);
+    const sinP = Math.sin(phi);
+    for (let is = 0; is < rows; is++) {
+      const sT = is / SEG_SLEEVE_L;
+      const r = THREE.MathUtils.lerp(sleeveBaseR, sleeveCuffR, sT);
+      const i = ia * rows + is;
+      const cx = base.x + dir.x * sleeveLength * sT;
+      const cy = base.y + dir.y * sleeveLength * sT;
+      const cz = base.z + dir.z * sleeveLength * sT;
+      positions[i * 3] = cx + (e1.x * cosP + e2.x * sinP) * r;
+      positions[i * 3 + 1] = cy + (e1.y * cosP + e2.y * sinP) * r;
+      positions[i * 3 + 2] = cz + (e1.z * cosP + e2.z * sinP) * r;
+      uvs[i * 2] = THREE.MathUtils.lerp(u0, u1, a);
+      // Shoulder end is the garment's top edge, same v=top rule as the body.
+      uvs[i * 2 + 1] = THREE.MathUtils.lerp(v1, v0, sT);
+    }
+  }
+
+  let k = 0;
+  const wind = sign > 0;
+  for (let ia = 0; ia < SEG_SLEEVE_A; ia++) {
+    for (let is = 0; is < SEG_SLEEVE_L; is++) {
+      const a = ia * rows + is;
+      const b = a + rows;
+      if (wind) {
+        indices[k++] = a; indices[k++] = b; indices[k++] = a + 1;
+        indices[k++] = b; indices[k++] = b + 1; indices[k++] = a + 1;
+      } else {
+        indices[k++] = a; indices[k++] = a + 1; indices[k++] = b;
+        indices[k++] = b; indices[k++] = a + 1; indices[k++] = b + 1;
+      }
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(new THREE.BufferAttribute(indices, 1));
+  geo.computeVertexNormals();
+  return geo;
+}
+
 export type JerseyPanels = {
   front: THREE.BufferGeometry;
   back: THREE.BufferGeometry;
   sideL: THREE.BufferGeometry;
   sideR: THREE.BufferGeometry;
+  sleeveL: THREE.BufferGeometry;
+  sleeveR: THREE.BufferGeometry;
 };
 
 /**
@@ -173,10 +272,14 @@ export type JerseyPanels = {
  */
 export function buildJersey(): JerseyPanels {
   return {
-    front: buildPanel(-50 * DEG, 50 * DEG, SEG_A_FB, [0.0, 0.5, 0.5, 1.0]),
-    back: buildPanel(130 * DEG, 230 * DEG, SEG_A_FB, [0.5, 0.5, 1.0, 1.0]),
-    sideL: buildPanel(230 * DEG, 310 * DEG, SEG_A_SIDE, [0.0, 0.0, 0.5, 0.5]),
-    sideR: buildPanel(50 * DEG, 130 * DEG, SEG_A_SIDE, [0.5, 0.0, 1.0, 0.5]),
+    // A front view of a jersey shows side seam to side seam: 180 degrees, not 100.
+    // Mapping the full source width into a 100-degree panel crushed the design.
+    front: buildPanel(-90 * DEG, 90 * DEG, SEG_A_FRONT, [0.0, 0.5, 0.5, 1.0], true),
+    sideR: buildPanel(90 * DEG, 140 * DEG, SEG_A_SIDE, [0.5, 0.0, 1.0, 0.5]),
+    back: buildPanel(140 * DEG, 220 * DEG, SEG_A_BACK, [0.5, 0.5, 1.0, 1.0]),
+    sideL: buildPanel(220 * DEG, 270 * DEG, SEG_A_SIDE, [0.0, 0.0, 0.5, 0.5]),
+    sleeveL: buildSleeve(-1, [0.0, 0.0, 0.5, 0.5]),
+    sleeveR: buildSleeve(1, [0.5, 0.0, 1.0, 0.5]),
   };
 }
 
@@ -193,5 +296,7 @@ export function panelCounts(panels: JerseyPanels): Record<keyof JerseyPanels, Pa
     back: count(panels.back),
     sideL: count(panels.sideL),
     sideR: count(panels.sideR),
+    sleeveL: count(panels.sleeveL),
+    sleeveR: count(panels.sleeveR),
   };
 }

@@ -10,7 +10,9 @@ export type Mask = {
 // product shot it was written for and fails on busy, textured or gradient
 // backgrounds, and on garments whose own colour touches the frame edge. Upgrade
 // path when that starts biting: an ML matting model (MODNet / RMBG onnxruntime-web).
-const TOL2 = 40 * 40 * 3;   // squared RGB distance from the backdrop reference
+// 40/channel was loose enough to call near-white artwork "backdrop". Real flat
+// backdrops vary by only a few levels; this still absorbs JPEG noise.
+const TOL2 = 26 * 26 * 3;   // squared RGB distance from the backdrop reference
 
 export function segment(pixels: Uint8ClampedArray, width: number, height: number): Mask {
   const n = width * height;
@@ -26,6 +28,11 @@ export function segment(pixels: Uint8ClampedArray, width: number, height: number
     floodBackground(pixels, width, height, solid);
   }
   despeckle(solid, width, height);
+  // Must run before keepLargest: the flood can tunnel through light-coloured
+  // artwork that touches the silhouette (a white chest band on a white backdrop,
+  // and then straight down the white piping beside a side stripe). That severs
+  // the garment, and keepLargest would then discard everything it cut off.
+  if (!hasAlpha) fillColumnSpans(solid, width, height);
   keepLargest(solid, width, height);
 
   const alpha = new Uint8Array(n);
@@ -94,6 +101,27 @@ function despeckle(solid: Uint8Array, width: number, height: number) {
       }
       solid[y * width + x] = c >= 5 ? 1 : 0;
     }
+  }
+}
+
+/**
+ * Re-closes each column between its topmost and bottommost garment pixel.
+ *
+ * ponytail: assumes a front-facing garment, where every column is contiguous from
+ * shoulder to hem. That holds for a jersey and repairs any tunnel the flood cut
+ * through it. It would wrongly bridge a genuine vertical gap — a flat-lay with the
+ * sleeves spread away from the body, or shorts photographed leg-apart.
+ */
+function fillColumnSpans(solid: Uint8Array, width: number, height: number) {
+  for (let x = 0; x < width; x++) {
+    let top = -1, bottom = -1;
+    for (let y = 0; y < height; y++) if (solid[y * width + x]) { top = y; break; }
+    if (top < 0) continue;
+    for (let y = height - 1; y >= 0; y--) if (solid[y * width + x]) { bottom = y; break; }
+    // A column spanning the entire frame means the flood never found a backdrop
+    // on this column; filling it would invent garment out of a failed cutout.
+    if (top === 0 && bottom === height - 1) continue;
+    for (let y = top; y <= bottom; y++) solid[y * width + x] = 1;
   }
 }
 
